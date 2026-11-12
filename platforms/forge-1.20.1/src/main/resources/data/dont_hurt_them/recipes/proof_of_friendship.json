@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "misc",
+  "pattern": ["R R", "ILI", "GGG"],
+  "key": {
+    "R": { "item": "minecraft:redstone" },
+    "I": { "item": "minecraft:iron_nugget" },
+    "L": { "item": "minecraft:lapis_lazuli" },
+    "G": { "item": "minecraft:gold_nugget" }
+  },
+  "result": { "item": "dont_hurt_them:proof_of_friendship", "count": 1 }
+}

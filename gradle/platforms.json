@@ -1,0 +1,11 @@
+{
+  "NeoForge1211": {
+    "directory": "neoforge-1.21.1",
+    "javaVersion": 21,
+    "loom": false
+  },
+  "Forge1201": { "directory": "forge-1.20.1", "javaVersion": 17, "loom": false },
+  "Fabric1211": { "directory": "fabric-1.21.1", "javaVersion": 21, "loom": true },
+  "Fabric12111": { "directory": "fabric-1.21.11", "javaVersion": 21, "loom": true },
+  "Fabric263": { "directory": "fabric-26.3", "javaVersion": 25, "loom": true }
+}

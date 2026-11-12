@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "package": "yagen.waitmydawn.dont_hurt_them.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "refmap": "dont_hurt_them.refmap.json",
+  "mixins": ["EntityProtectionMixin", "ProjectileCollisionMixin", "LivingEffectMixin", "PlayerCauseMixin", "LevelCauseMixin", "ScheduledCauseMixin", "ExplosionCauseMixin", "TickScheduleMixin", "RandomBlockCauseMixin", "RandomFluidCauseMixin", "LivingDeathMixin", "EntityDeathMixin"],
+  "client": ["client.EntityOutlineMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

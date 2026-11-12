@@ -1,0 +1,62 @@
+import groovy.json.JsonSlurper
+import org.gradle.api.services.BuildService
+import org.gradle.api.services.BuildServiceParameters
+
+plugins { id 'jvm-toolchains' }
+
+abstract class LoomCacheAccess implements BuildService<BuildServiceParameters.None> {}
+
+def windows = System.getProperty('os.name').toLowerCase().contains('windows')
+def loomCache = gradle.sharedServices.registerIfAbsent('fabricLoomCache', LoomCacheAccess) {
+    // The remapped Fabric builds resolve layered mappings through the same Gradle user cache.
+    maxParallelUsages = 1
+}
+
+def platformTask = { String name, String platform, int javaVersion, String task, boolean loom ->
+    tasks.register(name, Exec) {
+        if (loom) usesService(loomCache)
+        def launcher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(javaVersion) }
+        environment 'JAVA_HOME', launcher.get().metadata.installationPath.asFile.absolutePath
+        workingDir layout.projectDirectory.dir("platforms/${platform}")
+        commandLine((windows ? ['cmd.exe', '/d', '/c', 'gradlew.bat'] : ['bash', './gradlew']) +
+                ['--no-daemon', '--gradle-user-home', gradle.gradleUserHomeDir.absolutePath, task])
+        if (gradle.startParameter.offline) args '--offline'
+        def installations = providers.gradleProperty('org.gradle.java.installations.paths').orNull
+        if (installations) args "-Porg.gradle.java.installations.paths=${installations}"
+    }
+}
+def platforms = new JsonSlurper().parse(layout.projectDirectory.file('gradle/platforms.json').asFile)
+def platformTasks = { String action ->
+    platforms.collect { suffix, target ->
+        platformTask("${action}${suffix}", target.directory, target.javaVersion, action, target.loom == true)
+    }
+}
+def builds = platformTasks('build')
+def checks = platformTasks('check')
+def cleans = platformTasks('clean')
+
+
+def releaseDirectory = layout.buildDirectory.dir('libs')
+def releaseJars = platforms.values().collect { target ->
+    layout.projectDirectory.file("platforms/${target.directory}/build/libs/${mod_id}-${target.directory}-${mod_version}.jar")
+}
+def verifyReleaseJars = tasks.register('verifyReleaseJars') {
+    dependsOn builds
+    doLast {
+        def missing = releaseJars.findAll { !it.asFile.isFile() }
+        if (missing) throw new GradleException("Missing release JARs: ${missing}")
+    }
+}
+
+def collectReleaseJars = tasks.register('collectReleaseJars', Sync) {
+    dependsOn verifyReleaseJars
+    from releaseJars
+    into releaseDirectory
+}
+
+tasks.register('build') { dependsOn collectReleaseJars }
+tasks.register('check') { dependsOn checks }
+tasks.register('clean', Delete) {
+    dependsOn cleans
+    delete releaseDirectory
+}

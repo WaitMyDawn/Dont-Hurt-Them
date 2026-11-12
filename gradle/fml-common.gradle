@@ -1,0 +1,6 @@
+// Development runs and the release JAR use the same shared classes and resources.
+sourceSets.main.compileClasspath += commonProject.sourceSets.main.output.classesDirs
+sourceSets.main.output.classesDirs.from(commonProject.sourceSets.main.output.classesDirs)
+sourceSets.main.resources.srcDir commonProject.sourceSets.main.output.resourcesDir
+tasks.named('compileJava') { dependsOn commonProject.tasks.named('compileJava') }
+tasks.named('processResources') { dependsOn commonProject.tasks.named('processResources') }

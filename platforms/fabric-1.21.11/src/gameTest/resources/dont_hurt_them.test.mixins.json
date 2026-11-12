@@ -1,0 +1,15 @@
+{
+  "required": true,
+  "package": "yagen.waitmydawn.dont_hurt_them.testmixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "BlockSpawnMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "client": [
+    "ClientScreenProbe",
+    "ClientPortraitProbe"
+  ]
+}

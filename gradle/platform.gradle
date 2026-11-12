@@ -1,0 +1,50 @@
+import groovy.json.JsonGenerator
+
+apply from: '../../gradle/shared-properties.gradle'
+version = mod_version
+group = mod_group_id
+base.archivesName = "${mod_id}-${platformLoader}-${minecraft_version}"
+java.toolchain.languageVersion = JavaLanguageVersion.of(Integer.parseInt(platform_java))
+
+evaluationDependsOn(':common')
+ext.commonProject = project(':common')
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+tasks.named('jar') { from file('../../LICENSE.md') }
+tasks.named('check') { dependsOn commonProject.tasks.named('check') }
+
+tasks.named('processResources') {
+    def json = new JsonGenerator.Options().disableUnicodeEscaping().build()
+    def values = [
+        mod_id: mod_id, mod_name: mod_name, mod_license: mod_license, mod_version: mod_version,
+        mod_authors: mod_authors, mod_description: mod_description, minecraft_version: minecraft_version,
+        minecraft_range: "[${minecraft_version}]", java_requirement: ">=${platform_java}",
+        loader_requirement: ">=${loader_version}"
+    ]
+    ['fml_range', 'loader_range', 'fabric_api_version'].each { key ->
+        if (project.hasProperty(key)) values[key] = project.property(key)
+    }
+    if (project.hasProperty('fabric_api_version')) values.fabric_api_requirement = ">=${fabric_api_version}"
+    filteringCharset = 'UTF-8'
+    inputs.properties values
+    def escaped = values.collectEntries { key, value ->
+        String quoted = json.toJson(value.toString())
+        [(key): quoted.substring(1, quoted.length() - 1)]
+    }
+    def toml = values.collectEntries { key, value ->
+        def text = new StringBuilder()
+        value.toString().toCharArray().each { char c ->
+            int code = (int) c
+            if (c == '\\' || c == '"') text.append('\\').append(c)
+            else if (code < 32 || code == 127) text.append(String.format('\\u%04x', code))
+            else text.append(c)
+        }
+        [(key): text.toString()]
+    }
+    filesMatching('fabric.mod.json') {
+        // Literal, single-pass substitution preserves backslashes and user-authored ${...} text.
+        filter { String line -> line.replaceAll(/\$\{([a-z_]+)\}/) { full, key -> escaped.containsKey(key) ? escaped[key] : full } }
+    }
+    filesMatching(['META-INF/*.mods.toml', 'META-INF/mods.toml']) {
+        filter { String line -> line.replaceAll(/\$\{([a-z_]+)\}/) { full, key -> toml.containsKey(key) ? toml[key] : full } }
+    }
+}

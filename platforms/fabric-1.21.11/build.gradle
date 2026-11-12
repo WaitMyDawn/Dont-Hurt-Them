@@ -1,0 +1,36 @@
+plugins {
+    id 'net.fabricmc.fabric-loom-remap' version '1.14.10'
+}
+
+ext.platformLoader = 'fabric'
+apply from: '../../gradle/platform.gradle'
+
+repositories { mavenCentral() }
+dependencies {
+    minecraft "com.mojang:minecraft:${minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    implementation 'io.github.llamalad7:mixinextras-fabric:0.5.5'
+    implementation commonProject.sourceSets.main.output
+    implementation 'com.electronwill.night-config:core:3.8.3'
+    implementation 'com.electronwill.night-config:toml:3.8.3'
+    include 'com.electronwill.night-config:core:3.8.3'
+    include 'com.electronwill.night-config:toml:3.8.3'
+}
+
+loom {
+    mods {
+        "${mod_id}" {
+            sourceSet sourceSets.main
+            sourceSet commonProject.sourceSets.main
+        }
+    }
+    runs {
+        client { runDir 'run/client'; ideConfigGenerated true }
+        server { runDir 'run/server'; ideConfigGenerated true }
+    }
+}
+
+tasks.named('jar') { from commonProject.sourceSets.main.output }
+apply from: '../../gradle/fabric-tests.gradle'

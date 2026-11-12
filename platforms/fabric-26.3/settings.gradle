@@ -1,0 +1,9 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url = 'https://maven.fabricmc.net/' }
+    }
+}
+rootProject.name = 'dont-hurt-them-fabric-26.3'
+include ':common'
+project(':common').projectDir = file('../../common')

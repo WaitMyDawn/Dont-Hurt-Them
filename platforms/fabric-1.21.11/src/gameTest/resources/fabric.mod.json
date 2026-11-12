@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "dont_hurt_them_test",
+  "version": "1",
+  "environment": "*",
+  "entrypoints": {
+    "fabric-gametest": [
+      "yagen.waitmydawn.dont_hurt_them.FriendshipGameTests",
+      "yagen.waitmydawn.dont_hurt_them.LifecycleGameTests",
+      "yagen.waitmydawn.dont_hurt_them.ProjectileGameTests"
+    ],
+    "client": [
+      "yagen.waitmydawn.dont_hurt_them.ClientRegression"
+    ]
+  },
+  "mixins": [
+    "dont_hurt_them.test.mixins.json"
+  ],
+  "depends": {
+    "dont_hurt_them": "*",
+    "fabric-gametest-api-v1": "*"
+  }
+}

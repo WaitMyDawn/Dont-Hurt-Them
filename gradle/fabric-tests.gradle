@@ -1,0 +1,138 @@
+sourceSets {
+    gameTest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + compileClasspath + sourceSets.main.runtimeClasspath
+    }
+}
+configurations {
+    gameTestImplementation.extendsFrom implementation
+    gameTestRuntimeOnly.extendsFrom runtimeOnly
+}
+def remapped = plugins.hasPlugin('net.fabricmc.fabric-loom-remap')
+if (remapped) loom.createRemapConfigurations(sourceSets.gameTest)
+dependencies {
+    add(remapped ? 'modGameTestImplementation' : 'gameTestImplementation',
+            "net.fabricmc.fabric-api:fabric-gametest-api-v1:${gametest_api_version}")
+}
+loom {
+    mods {
+        "${mod_id}_test" { sourceSet sourceSets.gameTest }
+    }
+    runs {
+        gameTestServer {
+            server()
+            source sourceSets.gameTest
+            runDir 'run/gameTestServer'
+            vmArg '-Dfabric-api.gametest'
+            vmArg '-Dfabric-api.gametest.report-file=reports/gametest-results.xml'
+            programArg '--nogui'
+        }
+    }
+}
+
+configurations {
+    productionRuntimeMods { canBeConsumed = false }
+    productionTestMods {
+        canBeConsumed = false
+        extendsFrom productionRuntimeMods
+    }
+}
+dependencies {
+    productionRuntimeMods "net.fabricmc.fabric-api:fabric-api:${fabric_api_version}"
+    productionTestMods "net.fabricmc.fabric-api:fabric-gametest-api-v1:${gametest_api_version}"
+}
+def testJar = tasks.register('gameTestJar', Jar) {
+    archiveClassifier = 'gametest-dev'
+    from sourceSets.gameTest.output
+}
+def packagedTest = testJar
+def loomClasses = extensions.getByName('loom').class.classLoader
+if (remapped) {
+    packagedTest = tasks.register('remapGameTestJar', loomClasses.loadClass('net.fabricmc.loom.task.RemapJarTask')) {
+        inputFile = testJar.flatMap { it.archiveFile }
+        archiveClassifier = 'gametest'
+        classpath.from sourceSets.gameTest.compileClasspath
+        addNestedDependencies = false
+    }
+}
+tasks.register('runProductionGameTestServer', loomClasses.loadClass('net.fabricmc.loom.task.prod.ServerProductionRunTask')) {
+    installerVersion = '1.1.2'
+    mods.from tasks.named(remapped ? 'remapJar' : 'jar').flatMap { it.archiveFile }
+    mods.from packagedTest.flatMap { it.archiveFile }
+    mods.from configurations.productionTestMods
+    runDir = file('run/productionGameTestServer')
+    jvmArgs.addAll('-Dfabric-api.gametest', '-Dfabric-api.gametest.report-file=reports/gametest-results.xml')
+    programArgs.add('--nogui')
+}
+tasks.register('runProductionClient', loomClasses.loadClass('net.fabricmc.loom.task.prod.ClientProductionRunTask')) {
+    mods.from tasks.named(remapped ? 'remapJar' : 'jar').flatMap { it.archiveFile }
+    mods.from configurations.productionRuntimeMods
+    runDir = file('run/productionClient')
+}
+
+def regressionSave = file('run/productionClientRegression/saves/dht-client-regression').canonicalFile
+if (!regressionSave.toPath().startsWith(projectDir.canonicalFile.toPath())) {
+    throw new GradleException('Client regression save must stay inside the platform module')
+}
+def prepareClientRegressionWorld = tasks.register('prepareClientRegressionWorld', Sync) {
+    dependsOn tasks.named('runGameTestServer')
+    from('run/gameTestServer/world') { exclude 'session.lock' }
+    into regressionSave
+    doLast {
+        file('run/productionClientRegression/options.txt').text = 'onboardAccessibility:false\npauseOnLostFocus:false\ntutorialStep:none\n'
+    }
+}
+def clientMetadata = layout.buildDirectory.dir('clientRegressionMetadata')
+def generateClientRegressionMetadata = tasks.register('generateClientRegressionMetadata') {
+    inputs.file('src/gameTest/resources/fabric.mod.json')
+    inputs.file('src/gameTest/resources/dont_hurt_them.test.mixins.json')
+    outputs.dir clientMetadata
+    doLast {
+        def destination = clientMetadata.get().asFile
+        destination.mkdirs()
+        def metadata = new groovy.json.JsonSlurper().parse(file('src/gameTest/resources/fabric.mod.json'))
+        metadata.id = "${mod_id}_client_regression"
+        metadata.entrypoints = [client: metadata.entrypoints.client]
+        metadata.mixins = ['dont_hurt_them.client_regression.mixins.json']
+        metadata.depends.remove('fabric-gametest-api-v1')
+        new File(destination, 'fabric.mod.json').text = groovy.json.JsonOutput.toJson(metadata)
+        def mixins = new groovy.json.JsonSlurper().parse(file('src/gameTest/resources/dont_hurt_them.test.mixins.json'))
+        mixins.mixins = []
+        new File(destination, 'dont_hurt_them.client_regression.mixins.json').text = groovy.json.JsonOutput.toJson(mixins)
+    }
+}
+def clientTestJar = tasks.register('clientRegressionJar', Jar) {
+    archiveClassifier = 'client-regression-dev'
+    from(sourceSets.gameTest.output) {
+        include '**/ClientRegression*.class', '**/testmixin/Client*.class'
+    }
+    from generateClientRegressionMetadata
+}
+def packagedClientTest = clientTestJar
+if (remapped) {
+    packagedClientTest = tasks.register('remapClientRegressionJar', loomClasses.loadClass('net.fabricmc.loom.task.RemapJarTask')) {
+        inputFile = clientTestJar.flatMap { it.archiveFile }
+        archiveClassifier = 'client-regression'
+        classpath.from sourceSets.gameTest.compileClasspath
+        addNestedDependencies = false
+    }
+}
+tasks.register('runProductionClientRegression', loomClasses.loadClass('net.fabricmc.loom.task.prod.ClientProductionRunTask')) {
+    dependsOn prepareClientRegressionWorld
+    mods.from tasks.named(remapped ? 'remapJar' : 'jar').flatMap { it.archiveFile }
+    mods.from packagedClientTest.flatMap { it.archiveFile }
+    mods.from configurations.productionRuntimeMods
+    runDir = file('run/productionClientRegression')
+    jvmArgs.add('-Ddont_hurt_them.clientRegression=true')
+    jvmArgs.add("-XX:ErrorFile=${file('run/productionClientRegression/hs_err_pid%p.log').absolutePath}")
+    if (providers.gradleProperty('clientRegressionGraphicsBackend').isPresent()) {
+        programArgs.addAll('--graphicsBackend', providers.gradleProperty('clientRegressionGraphicsBackend').get())
+    }
+    programArgs.addAll('--quickPlaySingleplayer', 'dht-client-regression')
+    doLast {
+        def log = file('run/productionClientRegression/logs/latest.log')
+        if (!log.isFile() || !log.getText('UTF-8').contains('DHT_CLIENT_REGRESSION PASSED:')) {
+            throw new GradleException('Client exited without completing its regression assertions')
+        }
+    }
+}

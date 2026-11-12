@@ -1,0 +1,4 @@
+{
+  "parent": "minecraft:item/generated",
+  "textures": { "layer0": "dont_hurt_them:item/proof_of_friendship" }
+}

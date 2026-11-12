@@ -1,0 +1,26 @@
+plugins { id 'java-library' }
+
+java.toolchain.languageVersion = JavaLanguageVersion.of(Integer.parseInt(rootProject.findProperty('platform_java') ?: '17'))
+layout.buildDirectory = rootProject.layout.buildDirectory.dir('shared/common')
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // The compiler follows the platform JDK; release restricts common code to the oldest runtime and API.
+    options.release = 17
+}
+
+sourceSets {
+    rulesTest {
+        java.srcDir 'src/test/java'
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+    test { java.setSrcDirs([]) }
+}
+
+tasks.register('rulesTest', JavaExec) {
+    dependsOn rulesTestClasses
+    classpath = sourceSets.rulesTest.runtimeClasspath
+    mainClass = 'yagen.waitmydawn.dont_hurt_them.core.FriendshipRulesTest'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = java.toolchain.languageVersion }
+}
+tasks.named('check') { dependsOn rulesTest }

@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "${mod_id}",
+  "name": "${mod_name}",
+  "version": "${mod_version}",
+  "description": "${mod_description}",
+  "authors": [
+    "${mod_authors}"
+  ],
+  "license": "${mod_license}",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "yagen.waitmydawn.dont_hurt_them.DontHurtThem"
+    ],
+    "client": [
+      "yagen.waitmydawn.dont_hurt_them.client.ClientSetup"
+    ]
+  },
+  "depends": {
+    "minecraft": "${minecraft_version}",
+    "java": "${java_requirement}",
+    "fabricloader": "${loader_requirement}",
+    "fabric-api": "${fabric_api_requirement}",
+    "mixinextras": ">=0.5.5"
+  },
+  "mixins": [
+    "dont_hurt_them.mixins.json"
+  ]
+}

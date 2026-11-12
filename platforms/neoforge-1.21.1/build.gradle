@@ -1,0 +1,37 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.gradle.userdev' version '7.1.38'
+}
+
+ext.platformLoader = 'neoforge'
+apply from: '../../gradle/platform.gradle'
+apply from: '../../gradle/fml-common.gradle'
+
+repositories { mavenCentral() }
+dependencies { implementation "net.neoforged:neoforge:${loader_version}" }
+
+tasks.withType(net.neoforged.gradle.userdev.runtime.tasks.ClasspathSerializer).configureEach {
+    // The serialized output embeds absolute paths, so dependency locations must participate in the cache key.
+    inputs.files(inputFiles).withPropertyName('runtimeClasspathLocations')
+            .withPathSensitivity(PathSensitivity.ABSOLUTE)
+}
+
+sourceSets {
+    gameTest {
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + compileClasspath + sourceSets.main.runtimeClasspath
+    }
+}
+
+runs {
+    configureEach {
+        workingDirectory layout.projectDirectory.dir('run').dir(name)
+        modSource sourceSets.main
+    }
+    client {}
+    server { argument '--nogui' }
+    gameTestServer {
+        modSource sourceSets.gameTest
+        systemProperty 'neoforge.enabledGameTestNamespaces', mod_id
+    }
+}
