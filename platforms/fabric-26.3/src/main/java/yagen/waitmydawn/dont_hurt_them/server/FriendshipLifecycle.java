@@ -207,7 +207,8 @@ public final class FriendshipLifecycle {
         boolean added;
         try { added = level.addFreshEntity(restored); }
         catch (RuntimeException error) { rollback(level, tree); throw new IllegalArgumentException("spawn_blocked", error); }
-        if (!added) { rollback(level, tree); throw new IllegalArgumentException("uuid_conflict"); }
+        // UUID collisions are checked before insertion; cancellation can also return false.
+        if (!added) { rollback(level, tree); throw new IllegalArgumentException("spawn_blocked"); }
         if (!restored.getPassengers().isEmpty() || tree.stream().anyMatch(entity -> level.getEntity(entity.getUUID()) != entity)) {
             rollback(level, tree);
             throw new IllegalArgumentException("spawn_blocked");

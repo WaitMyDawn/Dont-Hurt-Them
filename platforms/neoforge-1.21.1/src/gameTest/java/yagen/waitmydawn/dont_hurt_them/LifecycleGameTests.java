@@ -315,9 +315,12 @@ public final class LifecycleGameTests {
         NeoForge.EVENT_BUS.addListener(block);
         try {
             try { FriendshipLifecycle.revive(player, "minecraft:sheep", uuid); helper.fail("Blocked spawn must fail revival"); }
-            catch (IllegalArgumentException expected) { helper.assertTrue(expected.getMessage().equals("spawn_blocked"), "Blocked spawn has a distinct result"); }
+            catch (IllegalArgumentException expected) { helper.assertTrue(expected.getMessage().equals("spawn_blocked"), "Expected spawn_blocked, got " + expected.getMessage()); }
         } finally { NeoForge.EVENT_BUS.unregister(block); }
         helper.assertTrue(FriendshipLifecycle.canRevive(player, "minecraft:sheep", uuid) && helper.getLevel().getEntity(uuid) == null, "Failure retains the record without a partial entity");
+        var retry = FriendshipLifecycle.revive(player, "minecraft:sheep", uuid);
+        helper.assertTrue(retry.getUUID().equals(uuid) && helper.getLevel().getEntity(uuid) == retry
+                && !FriendshipLifecycle.canRevive(player, "minecraft:sheep", uuid), "Removing the blocker allows the retained death record to be revived once");
         helper.succeed();
     }
 
