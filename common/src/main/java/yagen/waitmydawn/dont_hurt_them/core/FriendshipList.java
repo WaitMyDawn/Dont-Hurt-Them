@@ -23,6 +23,7 @@ public final class FriendshipList {
     public Collection<FriendshipEntry> entries() { return List.copyOf(entries.values()); }
     public List<FriendshipEntry> sorted() { return entries.values().stream().sorted(ORDER).toList(); }
     public boolean contains(String key) { return entries.containsKey(key); }
+    public FriendshipEntry get(String key) { return entries.get(key); }
 
     public boolean put(FriendshipEntry entry) {
         if (entries.size() >= MAX_ENTRIES && !entries.containsKey(entry.key())) return false;

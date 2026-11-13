@@ -32,6 +32,9 @@ public final class FriendshipSerialization {
         for (int i = 0; i < Math.min(entries.size(), FriendshipList.MAX_ENTRIES); i++) {
             CompoundTag tag = entries.getCompound(i);
             if (tag.getString("type").isBlank()) continue;
+            // Discard legacy player-wide rules in saves, snapshots and offline enforcement mirrors.
+            if (!tag.hasUUID("uuid") && net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE
+                    .getKey(net.minecraft.world.entity.EntityType.PLAYER).toString().equals(tag.getString("type"))) continue;
             list.put(new FriendshipEntry(tag.hasUUID("uuid") ? tag.getUUID("uuid") : null,
                     tag.getString("type"), tag.getString("name"), tag.getBoolean("favorite"),
                     tag.contains("added_at") ? tag.getLong("added_at") : -1));

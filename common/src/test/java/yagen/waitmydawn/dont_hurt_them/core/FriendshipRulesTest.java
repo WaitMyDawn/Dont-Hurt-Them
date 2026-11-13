@@ -7,6 +7,8 @@ public final class FriendshipRulesTest {
     public static void main(String[] args) {
         RegistryCompletionTest.run();
         AlbumRulesTest.run();
+        AlbumQueryTest.run();
+        AlbumHealthTest.run();
         UUID individual = UUID.fromString("43baf85b-8a67-483e-8753-34093a0e8448");
         FriendshipList alice = new FriendshipList(), bob = new FriendshipList();
         FriendshipEntry specific = new FriendshipEntry(individual, "odd:unrelated", "Zed", false);

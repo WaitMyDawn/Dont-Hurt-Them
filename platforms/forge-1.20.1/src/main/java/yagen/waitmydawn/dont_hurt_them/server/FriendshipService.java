@@ -12,12 +12,15 @@ import yagen.waitmydawn.dont_hurt_them.core.FriendshipEntry;
 import yagen.waitmydawn.dont_hurt_them.core.FriendshipList;
 import yagen.waitmydawn.dont_hurt_them.data.FriendshipSerialization;
 import yagen.waitmydawn.dont_hurt_them.data.OfflineFriendships;
-import yagen.waitmydawn.dont_hurt_them.data.FriendshipArchive;
 import yagen.waitmydawn.dont_hurt_them.network.FriendshipNetwork;
 import yagen.waitmydawn.dont_hurt_them.registries.ModRegistries;
 
 public final class FriendshipService {
-    public static FriendshipList list(Player player) { return player.getCapability(ModRegistries.FRIENDSHIPS).orElseThrow(() -> new IllegalStateException("Missing friendship capability")); }
+    public static FriendshipList list(Player player) {
+        FriendshipList list = player.getCapability(ModRegistries.FRIENDSHIPS).orElseThrow(() -> new IllegalStateException("Missing friendship capability"));
+        if (player.level() instanceof net.minecraft.server.level.ServerLevel level) OfflineFriendships.get(level.getServer()).applyRemovals(player.getUUID(), list);
+        return list;
+    }
     public static boolean holding(Player player) {
         return player.getMainHandItem().is(ModRegistries.PROOF_OF_FRIENDSHIP.get())
                 || player.getOffhandItem().is(ModRegistries.PROOF_OF_FRIENDSHIP.get());
@@ -44,9 +47,15 @@ public final class FriendshipService {
                     message(player, "invalid_type"); return;
                 }
                 var type = BuiltInRegistries.ENTITY_TYPE.get(id);
+                if (type == net.minecraft.world.entity.EntityType.PLAYER) { message(player, "player_type_forbidden"); return; }
                 if (list.contains("type/" + id)) { message(player, "exists"); return; }
                 changed = list.put(new FriendshipEntry(null, id.toString(), type.getDescription().getString(), false, player.server.overworld().getGameTime()));
                 if (!changed) message(player, "full");
+            }
+            case "clear_deceased" -> {
+                int removed = clearDeceased(player);
+                player.displayClientMessage(Component.translatable("message.dont_hurt_them.cleared_deceased", removed), false);
+                return;
             }
             case "remove" -> changed = list.remove(packet.key());
             case "favorite" -> changed = list.toggleFavorite(packet.key());
@@ -55,7 +64,30 @@ public final class FriendshipService {
         if (changed) changed(player);
     }
 
+    public static int clearDeceased(ServerPlayer player) {
+        if (!holding(player)) return 0;
+        var list = list(player);
+        int removed = 0;
+        for (FriendshipEntry entry : list.entries()) {
+            if (!entry.individual() || entry.favorite()) continue;
+            var record = FriendshipLifecycle.reconcileDeath(player.server, entry.entityId());
+            if (record != null && record.dead() && list.remove(entry.key())) removed++;
+        }
+        if (removed > 0) changed(player); else sync(player, false);
+        return removed;
+    }
+
     public static void changed(ServerPlayer player) {
+        var current = list(player);
+        var archive = yagen.waitmydawn.dont_hurt_them.data.FriendshipArchive.get(player.server);
+        for (FriendshipEntry entry : current.entries()) if (entry.individual()) {
+            var record = archive.find(entry.entityId());
+            if (record != null && record.dead() && FriendshipLifecycle.isKnownNonLiving(record, (net.minecraft.server.level.ServerLevel) player.level())) {
+                OfflineFriendships.get(player.server).forgetEntity(entry.entityId());
+                archive.forget(entry.entityId());
+                current.remove(entry.key());
+            }
+        }
         OfflineFriendships.get(player.server).update(player.getUUID(), list(player));
         sync(player, false);
     }
@@ -66,13 +98,14 @@ public final class FriendshipService {
         CompoundTag live = new CompoundTag();
         for (FriendshipEntry entry : list(player).entries()) {
             if (!entry.individual()) continue;
-            var death = FriendshipArchive.get(player.server).find(entry.entityId());
+            var death = FriendshipLifecycle.reconcileDeath(player.server, entry.entityId());
             if (death != null && death.dead()) { live.put(entry.key(), death.metadata()); continue; }
             for (var level : player.server.getAllLevels()) {
                 Entity entity = level.getEntity(entry.entityId());
                 if (entity == null || entity.isRemoved()) continue;
                 CompoundTag info = new CompoundTag();
                 info.putBoolean("loaded", true);
+                info.putBoolean("living", entity instanceof LivingEntity);
                 info.putBoolean("renameable", !(entity instanceof Player) && entity.isAlive());
                 info.putString("name", entity.getName().getString());
                 info.putString("dimension", level.dimension().location().toString());

@@ -17,6 +17,12 @@ public final class ClientFriendships {
     public static FriendshipList list() { return list; }
     public static CompoundTag live(String key) { return live.getCompoundOrEmpty(key); }
     public static boolean dead(String key) { return live(key).getBooleanOr("dead", false); }
+    public static String health(String key) {
+        CompoundTag info = live(key);
+        return yagen.waitmydawn.dont_hurt_them.core.AlbumHealth.label(info.getBooleanOr("loaded", false),
+                info.getFloatOr("health", Float.NaN),
+                info.getFloatOr("max_health", Float.NaN));
+    }
     public static long clock() {
         var level = Minecraft.getInstance().level;
         return clock + (level == null ? 0 : Math.max(0, level.getGameTime() - receivedAt));

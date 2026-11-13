@@ -15,7 +15,6 @@ import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.phys.Vec3;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import com.mojang.blaze3d.platform.InputConstants;
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -27,6 +26,7 @@ import yagen.waitmydawn.dont_hurt_them.DontHurtThem;
 import yagen.waitmydawn.dont_hurt_them.config.ClientConfigs;
 import yagen.waitmydawn.dont_hurt_them.core.AlbumFilter;
 import yagen.waitmydawn.dont_hurt_them.core.AlbumLayout;
+import yagen.waitmydawn.dont_hurt_them.core.AlbumQuery;
 import yagen.waitmydawn.dont_hurt_them.core.FriendshipEntry;
 import yagen.waitmydawn.dont_hurt_them.core.FriendshipList;
 import yagen.waitmydawn.dont_hurt_them.core.RegistryCompletion;
@@ -36,9 +36,15 @@ public final class FriendshipScreen extends Screen {
     private final Map<String, Entity> previews = new HashMap<>();
     private int nextPreviewId = -1;
     private final Set<String> failedPreviews = new HashSet<>();
-    private EditBox registry;
+    private final Map<UUID, Entity> tracked = new HashMap<>();
+    private final Map<String, AlbumQuery.EntityKind> entityKinds = new HashMap<>();
+    private net.minecraft.client.multiplayer.ClientLevel previewLevel;
+    private EditBox registry, search;
+    private String searchText = "";
+    private AlbumQuery.NonLivingMode nonLivingMode = AlbumQuery.NonLivingMode.INCLUDE;
+    private AlbumQuery.SearchField searchField = AlbumQuery.SearchField.NAME;
     private RegistryCompletion completion;
-    private CompactButton deadButton;
+    private CompactButton deadButton, clearDeadButton, nonLivingButton;
     private boolean individuals = true, types = true, favoritesOnly, deadOnly;
     private boolean applyingCompletion, tabCompleted, layoutDirty;
     private int suggestionOffset;
@@ -62,11 +68,24 @@ public final class FriendshipScreen extends Screen {
         addRenderableWidget(new CompactButton(left + 95, top + 23, 78, 16, text("types"), b -> { types = !types; page = 0; }, () -> types));
         addRenderableWidget(new CompactButton(left + 178, top + 23, 78, 16, text("favorites"), b -> { favoritesOnly = !favoritesOnly; page = 0; }, () -> favoritesOnly));
         deadButton = addRenderableWidget(new CompactButton(left + 261, top + 23, 68, 16, text("dead"), b -> { deadOnly = !deadOnly; page = 0; }, () -> deadOnly));
+        clearDeadButton = addRenderableWidget(new CompactButton(left + 334, top + 23, 82, 16, text("clear_deceased"), b -> send("clear_deceased", ""), () -> false));
+        nonLivingButton = addRenderableWidget(new CompactButton(left + 421, top + 23, 174, 16, text(nonLivingMode.labelKey()), b -> {
+            nonLivingMode = nonLivingMode.next(); b.setMessage(text(nonLivingMode.labelKey())); page = 0;
+        }, () -> nonLivingMode != AlbumQuery.NonLivingMode.INCLUDE));
         int bottom = top + panelHeight;
         registry = new EditBox(font, left + 12, bottom - 42, 180, 16, text("registry"));
         registry.setMaxLength(256); registry.setHint(Component.literal("namespace:entity"));
-        completion = new RegistryCompletion(BuiltInRegistries.ENTITY_TYPE.keySet().stream().map(Identifier::toString).toList());
+        completion = new RegistryCompletion(BuiltInRegistries.ENTITY_TYPE.keySet().stream()
+                .filter(id -> BuiltInRegistries.ENTITY_TYPE.getValue(id) != net.minecraft.world.entity.EntityTypes.PLAYER)
+                .map(Identifier::toString).toList());
         registry.setResponder(this::updateCompletion); registry.setValue(previousInput); addRenderableWidget(registry);
+        search = new EditBox(font, left + 148, top + 5, 196, 16, text("search"));
+        search.setMaxLength(256); search.setHint(text("search")); search.setValue(searchText);
+        search.setResponder(value -> { searchText = value; page = 0; }); addRenderableWidget(search);
+        addRenderableWidget(new CompactButton(left + 350, top + 5, 86, 16, text(searchField.labelKey()), b -> {
+            searchField = searchField.next(); b.setMessage(text(searchField.labelKey())); page = 0;
+        }, () -> false));
+        addRenderableWidget(new CompactButton(left + 441, top + 5, 22, 16, Component.literal("×"), b -> search.setValue(""), () -> false));
         addRenderableWidget(new CompactButton(left + 198, bottom - 42, 64, 16, text("add"), b -> addType(), () -> false));
         addRenderableWidget(new CompactButton(left + panelWidth - 106, bottom - 42, 94, 16, text("page_size").append(" " + capacity), b -> {
             ClientConfigs.setCardsPerPage(capacity == 2 ? 4 : capacity == 4 ? 8 : 2); page = 0; layoutDirty = true;
@@ -81,8 +100,9 @@ public final class FriendshipScreen extends Screen {
         // Opening the album must leave keyboard navigation available instead of focusing the registry editor.
     }
     private List<FriendshipEntry> entries() {
-        AlbumFilter filter = new AlbumFilter(individuals, types, favoritesOnly, deadOnly);
-        return ClientFriendships.list().sorted().stream().filter(entry -> filter.matches(entry, ClientFriendships.dead(entry.key()))).toList();
+        AlbumQuery query = new AlbumQuery(new AlbumFilter(individuals, types, favoritesOnly, deadOnly), nonLivingMode, searchField, searchText);
+        return ClientFriendships.list().sorted().stream().filter(entry -> query.matches(entry, ClientFriendships.dead(entry.key()), entityKind(entry),
+                query.needsName() ? displayName(entry, ClientFriendships.dead(entry.key()) ? null : findLive(entry), ClientFriendships.live(entry.key())) : "")).toList();
     }
     private int pageCount() { return Math.max(1, (entries().size() + capacity - 1) / capacity); }
     private void drawText(GuiGraphicsExtractor g, Component value, float x, float y, int color, float scale, int maxWidth) {
@@ -102,6 +122,7 @@ public final class FriendshipScreen extends Screen {
     private void addType() {
         String value = registry.getValue().trim(); Identifier id = Identifier.tryParse(value);
         if (id == null || !value.contains(":") || !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) { feedback = text("invalid"); return; }
+        if (BuiltInRegistries.ENTITY_TYPE.getValue(id) == net.minecraft.world.entity.EntityTypes.PLAYER) { feedback = text("player_type_forbidden"); return; }
         if (ClientFriendships.list().contains("type/" + id)) { feedback = text("exists"); return; }
         if (ClientFriendships.list().entries().size() >= FriendshipList.MAX_ENTRIES) { feedback = text("full"); return; }
         send("add_type", id.toString()); registry.setValue(""); feedback = text("sent");
@@ -110,16 +131,29 @@ public final class FriendshipScreen extends Screen {
     public void extractRenderState(GuiGraphicsExtractor g, int mouseX, int mouseY, float tick) {
         if (layoutDirty) { layoutDirty = false; rebuildWidgets(); }
         int mx = (int) (mouseX / uiScale), my = (int) (mouseY / uiScale);
-        boolean hasDead = ClientFriendships.list().entries().stream().anyMatch(entry -> ClientFriendships.dead(entry.key()));
+        refreshTracked();
+        boolean hasDead = false, canClearDead = false, hasNonLiving = false;
+        for (FriendshipEntry entry : ClientFriendships.list().entries()) {
+            if (entityKind(entry) == AlbumQuery.EntityKind.NON_LIVING) hasNonLiving = true;
+            if (!entry.individual() || !ClientFriendships.dead(entry.key())) continue;
+            hasDead = true;
+            if (!entry.favorite()) canClearDead = true;
+        }
         deadButton.visible = hasDead; if (!hasDead) deadOnly = false;
+        clearDeadButton.visible = hasDead;
+        clearDeadButton.active = canClearDead;
+        nonLivingButton.visible = hasNonLiving; nonLivingButton.setX(left + (hasDead ? 421 : 261));
+        if (!hasNonLiving && nonLivingMode != AlbumQuery.NonLivingMode.INCLUDE) {
+            nonLivingMode = AlbumQuery.NonLivingMode.INCLUDE; nonLivingButton.setMessage(text(nonLivingMode.labelKey())); page = 0;
+        }
         hoveredTooltip = List.of(); page = Math.min(page, pageCount() - 1);
         g.pose().pushMatrix(); g.pose().scale(uiScale, uiScale);
         try {
             g.fill(left, top, left + panelWidth, top + panelHeight, 0xF21B2633);
             g.fill(left, top, left + panelWidth, top + 2, 0xFF7BDCB5);
-            drawText(g, title, left + 12, top + 8, 0xFFE5F4EC, 0.9f, panelWidth - 24);
+            drawText(g, title, left + 12, top + 8, 0xFFE5F4EC, 0.9f, 128);
             List<FriendshipEntry> shown = entries();
-            if (shown.isEmpty()) drawText(g, text("empty"), left + 18, top + 64, 0xFFABC2D2, 0.8f, panelWidth - 36);
+            if (shown.isEmpty()) drawText(g, text(ClientFriendships.list().entries().isEmpty() ? "empty" : "no_matches"), left + 18, top + 64, 0xFFABC2D2, 0.8f, panelWidth - 36);
             for (int i = 0; i < capacity && page * capacity + i < shown.size(); i++) {
                 drawCard(g, shown.get(page * capacity + i), cardLeft + i % columns * (cardWidth + 8), top + 46 + i / columns * (cardHeight + 8), mx, my);
             }
@@ -165,15 +199,14 @@ public final class FriendshipScreen extends Screen {
             g.fill(x + 7, y + 15, x + Math.min(cardWidth - 40, 7 + (int) (font.width(name) * textScale)), y + 16, 0xFF000000 | color);
         }
         int portraitHeight = cardHeight - (entry.individual() ? 64 : 39);
-        if (portrait != null && !failedPreviews.contains(entry.typeId())) {
+        if (portrait != null && !failedPreviews.contains(previewKey(entry))) {
             try { EntityPortrait.render(g, portrait, x + 5, y + 32, cardWidth - 10, portraitHeight, mouseX, mouseY); }
-            catch (RuntimeException error) { failedPreviews.add(entry.typeId()); DontHurtThem.LOGGER.warn("Cannot render friendship portrait for {}", entry.typeId(), error); }
+            catch (RuntimeException error) { failedPreviews.add(previewKey(entry)); DontHurtThem.LOGGER.warn("Cannot render friendship portrait for {}", entry.key(), error); }
         } else drawText(g, text("no_preview"), x + 7, y + 44, 0xFF96A9B9, textScale, cardWidth - 14);
         if (entry.individual()) {
             if (dead) drawText(g, text("dead"), x + 7, y + cardHeight - 20, color, textScale, cardWidth - 14);
             else {
-                String health = live instanceof LivingEntity living ? format(living.getHealth()) + " / " + format(living.getMaxHealth())
-                        : info.contains("health") ? format(info.getFloatOr("health", 0)) + " / " + format(info.getFloatOr("max_health", 0)) : "--";
+                String health = ClientFriendships.health(entry.key());
                 drawText(g, text("health").append(health), x + 7, y + cardHeight - 24, 0xFFE2D0CD, textScale, cardWidth - 14);
                 if (live != null || info.getBooleanOr("loaded", false)) {
                     double px = live == null ? info.getDoubleOr("x", 0) : live.getX(), py = live == null ? info.getDoubleOr("y", 0) : live.getY(), pz = live == null ? info.getDoubleOr("z", 0) : live.getZ();
@@ -197,26 +230,56 @@ public final class FriendshipScreen extends Screen {
         for (int i = 0; i < hoveredTooltip.size(); i++) drawText(g, hoveredTooltip.get(i), x + 6, y + 5 + i * 11, 0xFFE3E8EF, scale, w - 12);
         g.pose().popMatrix();
     }
+    private void refreshTracked() {
+        tracked.clear();
+        if (previewLevel != minecraft.level) {
+            previewLevel = minecraft.level; previews.clear(); failedPreviews.clear(); entityKinds.clear();
+        }
+        if (minecraft.level != null) for (Entity entity : minecraft.level.entitiesForRendering()) {
+            if (!entity.isRemoved()) tracked.put(entity.getUUID(), entity);
+        }
+    }
     private Entity findLive(FriendshipEntry entry) {
-        if (!entry.individual() || minecraft.level == null) return null;
-        for (Entity entity : minecraft.level.entitiesForRendering()) if (entity.getUUID().equals(entry.entityId()) && !entity.isRemoved()) return entity;
-        return null;
+        Entity entity = entry.individual() ? tracked.get(entry.entityId()) : null;
+        return entity == null || entity.isRemoved() ? null : entity;
+    }
+    private AlbumQuery.EntityKind entityKind(FriendshipEntry entry) {
+        Entity live = findLive(entry);
+        if (live != null) return live instanceof LivingEntity ? AlbumQuery.EntityKind.LIVING : AlbumQuery.EntityKind.NON_LIVING;
+        CompoundTag info = ClientFriendships.live(entry.key());
+        if (info.contains("living")) return info.getBooleanOr("living", false) ? AlbumQuery.EntityKind.LIVING : AlbumQuery.EntityKind.NON_LIVING;
+        return entityKinds.computeIfAbsent(previewKey(entry), key -> {
+            Identifier id = Identifier.tryParse(entry.typeId());
+            if (id == null || !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) return AlbumQuery.EntityKind.UNKNOWN;
+            EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(id);
+            if (type == net.minecraft.world.entity.EntityTypes.PLAYER || net.minecraft.world.entity.ai.attributes.DefaultAttributes.hasSupplier(type)) return AlbumQuery.EntityKind.LIVING;
+            // Classification requires a real runtime class; a missing factory is not evidence of a nonliving entity.
+            Entity entity = preview(entry);
+            return entity == null ? AlbumQuery.EntityKind.UNKNOWN : entity instanceof LivingEntity ? AlbumQuery.EntityKind.LIVING : AlbumQuery.EntityKind.NON_LIVING;
+        });
+    }
+    private static String previewKey(FriendshipEntry entry) {
+        // Player skin lookup and cached previews must keep each recorded UUID distinct.
+        return entry.individual() && BuiltInRegistries.ENTITY_TYPE.getKey(net.minecraft.world.entity.EntityTypes.PLAYER).toString().equals(entry.typeId())
+                ? entry.key() : entry.typeId();
     }
     private Entity preview(FriendshipEntry entry) {
-        if (failedPreviews.contains(entry.typeId()) || minecraft.level == null) return null;
-        return previews.computeIfAbsent(entry.typeId(), key -> {
+        if (failedPreviews.contains(previewKey(entry)) || minecraft.level == null) return null;
+        Entity result = previews.computeIfAbsent(previewKey(entry), key -> {
             try {
-                Identifier id = Identifier.tryParse(key);
+                Identifier id = Identifier.tryParse(entry.typeId());
                 if (id == null || !BuiltInRegistries.ENTITY_TYPE.containsKey(id)) return null;
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(id);
                 Entity entity = type == net.minecraft.world.entity.EntityTypes.PLAYER
-                        ? new RemotePlayer(minecraft.level, new GameProfile(UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)), "Friend"))
+                        ? (entry.individual() ? new RemotePlayer(minecraft.level, new GameProfile(entry.entityId(), entry.name())) : null)
                         : type.create(minecraft.level, net.minecraft.world.entity.EntitySpawnReason.LOAD);
                 // Render-state extraction needs a nonzero ID even when previews never enter the world.
                 if (entity != null) entity.setId(nextPreviewId--);
                 return entity;
             } catch (RuntimeException error) { failedPreviews.add(key); DontHurtThem.LOGGER.warn("Cannot create friendship portrait for {}", key, error); return null; }
         });
+        if (result == null) failedPreviews.add(previewKey(entry));
+        return result;
     }
     private boolean suggestionsVisible() { return registry.isFocused() && completion.visible(); }
     private int suggestionRows() { return Math.min(5, completion.matches().size()); }
@@ -253,7 +316,9 @@ public final class FriendshipScreen extends Screen {
             return true;
         }
         boolean inputClicked = registry.isMouseOver(mouseX, mouseY);
-        if (!inputClicked) { completion.dismiss(); if (getFocused() == registry) setFocused(null); }
+        boolean searchClicked = search.isMouseOver(mouseX, mouseY);
+        if (!inputClicked) completion.dismiss();
+        if (!inputClicked && !searchClicked && (getFocused() == registry || getFocused() == search)) setFocused(null);
         if (inputClicked && button == InputConstants.MOUSE_BUTTON_LEFT) { updateCompletion(registry.getValue()); completion.show(); }
         if (super.mouseClicked(new net.minecraft.client.input.MouseButtonEvent(mouseX, mouseY, event.buttonInfo()), doubleClick)) return true;
         if (button != InputConstants.MOUSE_BUTTON_LEFT) return false;

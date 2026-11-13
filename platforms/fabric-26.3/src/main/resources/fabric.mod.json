@@ -8,6 +8,7 @@
     "${mod_authors}"
   ],
   "license": "${mod_license}",
+  "icon": "assets/dont_hurt_them/textures/item/proof_of_friendship.png",
   "environment": "*",
   "entrypoints": {
     "main": [

@@ -20,6 +20,7 @@ public final class FriendshipArchive extends SavedData {
             CompoundTag tag = new CompoundTag();
             tag.putBoolean("dead", dead()); tag.putString("name", name); tag.putString("dimension", dimension);
             tag.putLong("death_tick", diedAt);
+            if (cause.getBooleanOr("living_entity", false)) tag.putBoolean("living", true);
             var pos = NbtCompat.list(entity, "Pos", Tag.TAG_DOUBLE);
             if (pos.size() == 3) { tag.putDouble("x", pos.getDoubleOr(0, 0)); tag.putDouble("y", pos.getDoubleOr(1, 0)); tag.putDouble("z", pos.getDoubleOr(2, 0)); }
             return tag;
@@ -30,6 +31,7 @@ public final class FriendshipArchive extends SavedData {
         return server.overworld().getDataStorage().computeIfAbsent(new net.minecraft.world.level.saveddata.SavedDataType<>(net.minecraft.resources.Identifier.withDefaultNamespace("dont_hurt_them_archive"), FriendshipArchive::new, CompoundTag.CODEC.xmap(tag -> FriendshipArchive.load(tag, null), data -> data.save(new CompoundTag(), null)), null));
     }
     public DeathRecord find(UUID uuid) { return records.get(uuid); }
+    public void forget(UUID uuid) { if (records.remove(uuid) != null) setDirty(); }
     public void record(DeathRecord record) { records.put(record.uuid(), record); setDirty(); }
     public void revived(UUID uuid, long tick) {
         DeathRecord old = records.get(uuid);

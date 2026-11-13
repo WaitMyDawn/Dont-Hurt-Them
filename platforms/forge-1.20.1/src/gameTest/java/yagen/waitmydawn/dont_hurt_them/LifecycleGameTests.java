@@ -33,6 +33,220 @@ import yagen.waitmydawn.dont_hurt_them.server.FriendshipService;
 @GameTestHolder(DontHurtThem.MODID)
 @PrefixGameTestTemplate(false)
 public final class LifecycleGameTests {
+    @GameTest(template = "empty")
+    public static void revivalDoesNotArchiveOrRestoreLivingPassengers(GameTestHelper helper) {
+        Player owner = helper.makeMockPlayer();
+        var horse = helper.spawn(EntityType.HORSE, 2, 2, 2);
+        var rider = helper.spawn(EntityType.COW, 3, 2, 2);
+        helper.assertTrue(rider.startRiding(horse), "Living rider mounts the horse fixture");
+        befriend(owner, horse); befriend(owner, rider);
+        UUID riderId = rider.getUUID();
+        kill(horse);
+        var archive = FriendshipArchive.get(helper.getLevel().getServer());
+        helper.assertTrue(!archive.find(horse.getUUID()).entity().contains("Passengers"), "New snapshots exclude every passenger");
+        kill(rider); rider.discard(); horse.discard();
+        String type = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.HORSE).toString();
+        Entity restored = FriendshipLifecycle.revive(owner, type, horse.getUUID());
+        helper.assertTrue(restored.getPassengers().isEmpty() && helper.getLevel().getEntity(riderId) == null, "Only the target horse is restored");
+        helper.assertTrue(archive.find(riderId).dead(), "Another friend's death record is not consumed with the mount");
+        helper.succeed();
+    }
+
+
+
+    @GameTest(template = "empty")
+    public static void destroyedNonlivingFriendsAreForgottenWithoutDeathSnapshots(GameTestHelper helper) {
+        ServerPlayer owner = serverPlayer(helper);
+        var frame = EntityType.ITEM_FRAME.create(helper.getLevel());
+        if (frame == null) { helper.fail("Cannot create frame fixture"); return; }
+        var pos = helper.absolutePos(new net.minecraft.core.BlockPos(2, 2, 2));
+        frame.setPos(pos.getX(), pos.getY(), pos.getZ());
+        helper.assertTrue(helper.getLevel().addFreshEntity(frame), "Frame fixture enters the level");
+        befriend(owner, frame);
+        String type = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(frame.getType()).toString();
+        FriendshipService.list(owner).put(new FriendshipEntry(null, type, "Frames", false, 1));
+        Player offlineOwner = helper.makeMockPlayer(); befriend(offlineOwner, frame);
+        var savedPlayerList = FriendshipSerialization.read(FriendshipSerialization.write(FriendshipService.list(offlineOwner)));
+        helper.assertTrue(FriendshipLifecycle.capture(frame, null) == null, "Nonliving entities never create death snapshots");
+        frame.setRemoved(Entity.RemovalReason.KILLED);
+        helper.assertTrue(!FriendshipService.list(owner).contains("entity/" + frame.getUUID()), "Destruction removes even a favorite individual frame");
+        helper.assertTrue(FriendshipService.list(owner).contains("type/" + type), "Entity-type protection survives individual destruction");
+        helper.assertTrue(FriendshipArchive.get(helper.getLevel().getServer()).find(frame.getUUID()) == null, "No nonliving death archive is retained");
+        var mirror = OfflineFriendships.get(helper.getLevel().getServer());
+        helper.assertTrue(!mirror.find(offlineOwner.getUUID()).contains("entity/" + frame.getUUID()), "Offline enforcement mirror is cleaned");
+        mirror.applyRemovals(offlineOwner.getUUID(), savedPlayerList);
+        helper.assertTrue(!savedPlayerList.contains("entity/" + frame.getUUID()), "Pending cleanup removes the stale persisted player entry on return");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void legacyNonlivingDeathsCannotBeRevivedAndLivingMiscTypesRemainValid(GameTestHelper helper) {
+        ServerPlayer owner = serverPlayer(helper);
+        var frame = EntityType.ITEM_FRAME.create(helper.getLevel());
+        if (frame == null) { helper.fail("Cannot create legacy frame fixture"); return; }
+        befriend(owner, frame);
+        String type = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(frame.getType()).toString();
+        var archive = FriendshipArchive.get(helper.getLevel().getServer());
+        archive.record(new FriendshipArchive.DeathRecord(frame.getUUID(), type, "minecraft:overworld", "Old frame", 1, -1, new CompoundTag(), new CompoundTag()));
+        helper.assertTrue(!FriendshipLifecycle.canRevive(owner, type, frame.getUUID()), "Legacy nonliving death records are not eligible for revival");
+        FriendshipService.changed(owner);
+        helper.assertTrue(!FriendshipService.list(owner).contains("entity/" + frame.getUUID()) && archive.find(frame.getUUID()) == null, "Legacy nonliving entries and snapshots are removed");
+        String armorStand = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.ARMOR_STAND).toString();
+        helper.assertTrue(!FriendshipLifecycle.isKnownNonLiving(new FriendshipArchive.DeathRecord(UUID.randomUUID(), armorStand, "minecraft:overworld", "Stand", 1, -1, new CompoundTag(), new CompoundTag()), helper.getLevel()), "LivingEntity classification must not use the MISC spawn category");
+        helper.succeed();
+    }
+
+
+    @GameTest(template = "empty")
+    public static void revivalRefusesPlayerArguments(GameTestHelper helper) {
+        Player owner = helper.makeMockPlayer();
+        String playerType = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.PLAYER).toString();
+        try { FriendshipLifecycle.revive(owner, playerType, UUID.randomUUID()); helper.fail("Player revival must be rejected before loading a snapshot"); }
+        catch (IllegalArgumentException expected) { helper.assertTrue(expected.getMessage().equals("player_revive_forbidden"), "Player revival has a dedicated rejection"); }
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void unloadedGravesStayUnloadedAndExplicitDestinationsCanOverrideThem(GameTestHelper helper) {
+        Player owner = helper.makeMockPlayer();
+        var cow = helper.spawn(EntityType.COW, 2, 2, 2); befriend(owner, cow); kill(cow); cow.discard();
+        var archive = FriendshipArchive.get(helper.getLevel().getServer());
+        var old = archive.find(cow.getUUID());
+        var snapshot = old.entity().copy();
+        net.minecraft.nbt.ListTag far = new net.minecraft.nbt.ListTag();
+        far.add(net.minecraft.nbt.DoubleTag.valueOf(24000000.5)); far.add(net.minecraft.nbt.DoubleTag.valueOf(70)); far.add(net.minecraft.nbt.DoubleTag.valueOf(24000000.5));
+        snapshot.put("Pos", far);
+        archive.record(new FriendshipArchive.DeathRecord(old.uuid(), old.type(), old.dimension(), old.name(), old.diedAt(), -1, snapshot, old.cause()));
+        helper.assertTrue(helper.getLevel().getChunkSource().getChunkNow(1500000, 1500000) == null, "Distant grave starts unloaded");
+        try { FriendshipLifecycle.revive(owner, old.type(), old.uuid()); helper.fail("Unloaded graves must not be loaded by revival"); }
+        catch (IllegalArgumentException expected) { helper.assertTrue(expected.getMessage().equals("grave_unloaded"), "Unloaded grave rejection"); }
+        helper.assertTrue(helper.getLevel().getChunkSource().getChunkNow(1500000, 1500000) == null && archive.find(old.uuid()).dead(), "Failure neither loads the grave nor consumes the record");
+        var target = cow.position().add(0, 1, 0);
+        Entity restored = FriendshipLifecycle.revive(owner, old.type(), old.uuid(), helper.getLevel(), target);
+        helper.assertTrue(restored.position().distanceToSqr(target) < 0.000001, "Explicit destination overrides the unloaded grave");
+        helper.assertTrue(!archive.find(old.uuid()).dead(), "Successful override consumes active death status");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void revivalCoordinatesUseVanillaParsingAndRequireThreeComponents(GameTestHelper helper) throws Exception {
+        ServerPlayer owner = serverPlayer(helper);
+        var cow = helper.spawn(EntityType.COW, 2, 2, 2); befriend(owner, cow); kill(cow); cow.discard();
+        owner.setPos(cow.getX(), cow.getY() + 1, cow.getZ());
+        var source = owner.createCommandSourceStack().withPermission(2);
+        var dispatcher = helper.getLevel().getServer().getCommands().getDispatcher();
+        String command = "dht revive minecraft:cow " + cow.getUUID();
+        try { dispatcher.execute(command + " ~ ~", source); helper.fail("Two coordinates cannot execute revival"); }
+        catch (com.mojang.brigadier.exceptions.CommandSyntaxException expected) { }
+        helper.assertTrue(FriendshipArchive.get(helper.getLevel().getServer()).find(cow.getUUID()).dead(), "Incomplete coordinates preserve the record");
+        helper.assertTrue(dispatcher.execute(command + " ~ ~ ~", source) == 1, "Vanilla relative coordinates execute revival");
+        var restored = helper.getLevel().getEntity(cow.getUUID());
+        helper.assertTrue(restored != null && restored.position().distanceToSqr(source.getPosition()) < 0.000001, "Relative destination uses the command source position");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void clearingDeceasedPreservesFavoritesOtherRulesAndSharedArchives(GameTestHelper helper) {
+        ServerPlayer owner = serverPlayer(helper);
+        owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModRegistries.PROOF_OF_FRIENDSHIP.get()));
+        var cow = helper.spawn(EntityType.COW, 2, 2, 2); befriend(owner, cow);
+        var sheep = helper.spawn(EntityType.SHEEP, 3, 2, 2); befriend(owner, sheep);
+        var pig = helper.spawn(EntityType.PIG, 4, 2, 2); befriend(owner, pig);
+        var list = FriendshipService.list(owner);
+        list.put(list.get("entity/" + cow.getUUID()).withFavorite(false));
+        String type = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.COW).toString();
+        list.put(new FriendshipEntry(null, type, "Cows", false, 1));
+        UUID missing = UUID.randomUUID();
+        list.put(new FriendshipEntry(missing, type, "Unloaded", false, 2));
+        Player other = helper.makeMockPlayer(); befriend(other, cow);
+        kill(cow); kill(sheep);
+        helper.assertTrue(FriendshipService.clearDeceased(owner) == 1, "Only the non-favorite confirmed death is removed");
+        helper.assertTrue(!list.contains("entity/" + cow.getUUID()) && list.contains("entity/" + sheep.getUUID()), "Favorite deceased friend survives cleanup");
+        helper.assertTrue(list.contains("entity/" + pig.getUUID()) && list.contains("type/" + type) && list.contains("entity/" + missing), "Living friends, type rules and unconfirmed missing entities survive");
+        helper.assertTrue(FriendshipService.list(other).contains("entity/" + cow.getUUID()) && FriendshipArchive.get(helper.getLevel().getServer()).find(cow.getUUID()).dead(), "Another owner and the shared archive remain intact");
+        list.put(list.get("entity/" + sheep.getUUID()).withFavorite(false));
+        owner.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY);
+        helper.assertTrue(FriendshipService.clearDeceased(owner) == 0 && list.contains("entity/" + sheep.getUUID()), "Cleanup requires holding the tool");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void legacyPassengersAreIgnoredBeforeDeserialization(GameTestHelper helper) {
+        Player owner = helper.makeMockPlayer();
+        var cow = helper.spawn(EntityType.COW, 2, 2, 2); befriend(owner, cow); kill(cow); cow.discard();
+        var rider = helper.spawn(EntityType.COW, 4, 2, 2);
+        var riderPosition = rider.position();
+        float riderHealth = rider.getHealth();
+        var archive = FriendshipArchive.get(helper.getLevel().getServer());
+        var old = archive.find(cow.getUUID());
+        var snapshot = old.entity().copy();
+        CompoundTag playerPassenger = new CompoundTag();
+        playerPassenger.putString("id", net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.PLAYER).toString());
+        CompoundTag livingPassenger = new CompoundTag();
+        livingPassenger.putString("id", old.type());
+        livingPassenger.putUUID("UUID", rider.getUUID());
+        net.minecraft.nbt.ListTag passengers = new net.minecraft.nbt.ListTag();
+        passengers.add(playerPassenger); passengers.add(livingPassenger); snapshot.put("Passengers", passengers);
+        archive.record(new FriendshipArchive.DeathRecord(old.uuid(), old.type(), old.dimension(), old.name(), old.diedAt(), -1, snapshot, old.cause()));
+        Entity restored = FriendshipLifecycle.revive(owner, old.type(), old.uuid());
+        helper.assertTrue(restored.getPassengers().isEmpty() && !archive.find(old.uuid()).dead(), "Legacy passenger data cannot block or expand root-only revival");
+        helper.assertTrue(helper.getLevel().getEntity(rider.getUUID()) == rider && rider.getHealth() == riderHealth
+                && rider.position().equals(riderPosition) && !rider.isPassenger(), "Existing riders are neither duplicated, moved, damaged nor remounted");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void spontaneousRevivalRequiresALivingEntityWithTheSameUuid(GameTestHelper helper) {
+        Player owner = helper.makeMockPlayer();
+        var type = EntityType.COW;
+        var cow = helper.spawn(type, 2, 2, 2);
+        befriend(owner, cow);
+        UUID uuid = cow.getUUID();
+        String typeId = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(type).toString();
+        var server = helper.getLevel().getServer();
+        kill(cow);
+        var original = FriendshipLifecycle.reconcileDeath(server, uuid);
+        helper.assertTrue(original != null && original.dead(), "A loaded corpse remains confirmed dead");
+        cow.discard();
+        var unrelated = helper.spawn(type, 4, 2, 2);
+        unrelated.setCustomName(cow.getName());
+        helper.assertTrue(FriendshipLifecycle.reconcileDeath(server, uuid).dead(), "A missing entity remains dead despite another entity with the same type and name");
+        var restored = type.create(helper.getLevel());
+        if (restored == null) { helper.fail("Cannot create revival fixture"); return; }
+        restored.setUUID(uuid);
+        restored.setPos(cow.getX(), cow.getY(), cow.getZ());
+        helper.assertTrue(helper.getLevel().addFreshEntity(restored), "The original UUID can return after corpse removal");
+        helper.assertTrue(!FriendshipLifecycle.canRevive(owner, typeId, uuid), "The command reconciles spontaneous revival before offering another revival");
+        var reconciled = FriendshipArchive.get(server).find(uuid);
+        helper.assertTrue(!reconciled.dead() && reconciled.diedAt() == original.diedAt() && reconciled.revivedAt() >= 0, "Revival clears active death status and preserves death history");
+        helper.succeed();
+    }
+
+    @GameTest(template = "empty")
+    public static void playerFriendshipsRequireIndividualIdentity(GameTestHelper helper) {
+        ServerPlayer owner = serverPlayer(helper);
+        owner.setItemInHand(InteractionHand.MAIN_HAND, new ItemStack(ModRegistries.PROOF_OF_FRIENDSHIP.get()));
+        String playerType = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.PLAYER).toString();
+        FriendshipService.action(owner, new yagen.waitmydawn.dont_hurt_them.network.FriendshipNetwork.Action("add_type", playerType));
+        helper.assertTrue(!FriendshipService.list(owner).contains("type/" + playerType), "Server rejects a player-wide rule");
+        Player friend = helper.makeMockPlayer();
+        Player stranger = helper.makeMockPlayer();
+        FriendshipService.toggle(owner, friend);
+        helper.assertTrue(FriendshipService.list(owner).protects(friend.getUUID(), playerType), "Right-click adds a specific player UUID");
+        var legacy = new yagen.waitmydawn.dont_hurt_them.core.FriendshipList();
+        legacy.put(new FriendshipEntry(null, playerType, "Players", true, 1));
+        legacy.put(new FriendshipEntry(friend.getUUID(), playerType, friend.getName().getString(), false, 2));
+        String cowType = net.minecraft.core.registries.BuiltInRegistries.ENTITY_TYPE.getKey(EntityType.COW).toString();
+        legacy.put(new FriendshipEntry(null, cowType, "Cows", false, 3));
+        var restored = FriendshipSerialization.read(FriendshipSerialization.write(legacy));
+        helper.assertTrue(!restored.contains("type/" + playerType), "Legacy player-wide rules are discarded");
+        helper.assertTrue(restored.protects(friend.getUUID(), playerType) && !restored.protects(stranger.getUUID(), playerType), "Player rules remain personal after persistence");
+        helper.assertTrue(restored.protects(UUID.randomUUID(), cowType), "Unrelated entity types retain type-wide protection");
+        FriendshipService.toggle(owner, friend);
+        helper.assertTrue(!FriendshipService.list(owner).protects(friend.getUUID(), playerType), "Right-click again removes the specific player");
+        helper.succeed();
+    }
+
     private static ServerPlayer serverPlayer(GameTestHelper helper) {
         return net.minecraftforge.common.util.FakePlayerFactory.get(helper.getLevel(),
                 new com.mojang.authlib.GameProfile(UUID.randomUUID(), "dht_" + UUID.randomUUID().toString().substring(0, 8)));

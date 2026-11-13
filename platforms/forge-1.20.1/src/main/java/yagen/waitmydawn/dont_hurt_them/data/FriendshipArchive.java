@@ -18,6 +18,7 @@ public final class FriendshipArchive extends SavedData {
             CompoundTag tag = new CompoundTag();
             tag.putBoolean("dead", dead()); tag.putString("name", name); tag.putString("dimension", dimension);
             tag.putLong("death_tick", diedAt);
+            if (cause.getBoolean("living_entity")) tag.putBoolean("living", true);
             var pos = entity.getList("Pos", Tag.TAG_DOUBLE);
             if (pos.size() == 3) { tag.putDouble("x", pos.getDouble(0)); tag.putDouble("y", pos.getDouble(1)); tag.putDouble("z", pos.getDouble(2)); }
             return tag;
@@ -28,6 +29,7 @@ public final class FriendshipArchive extends SavedData {
         return server.overworld().getDataStorage().computeIfAbsent(FriendshipArchive::load, FriendshipArchive::new, "dont_hurt_them_archive");
     }
     public DeathRecord find(UUID uuid) { return records.get(uuid); }
+    public void forget(UUID uuid) { if (records.remove(uuid) != null) setDirty(); }
     public void record(DeathRecord record) { records.put(record.uuid(), record); setDirty(); }
     public void revived(UUID uuid, long tick) {
         DeathRecord old = records.get(uuid);

@@ -7,13 +7,11 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import yagen.waitmydawn.dont_hurt_them.server.DamageProtection;
-import yagen.waitmydawn.dont_hurt_them.server.FriendshipLifecycle;
 
 @Mixin(Entity.class)
 public abstract class EntityProtectionMixin {
     @Inject(method = "isInvulnerableToBase", at = @At("HEAD"), cancellable = true)
     private void dontHurtThem$protect(DamageSource source, CallbackInfoReturnable<Boolean> callback) {
         if (DamageProtection.shouldProtect((Entity) (Object) this, source)) callback.setReturnValue(true);
-        else FriendshipLifecycle.prepareNonLiving((Entity) (Object) this, source);
     }
 }

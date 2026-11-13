@@ -9,7 +9,7 @@ import yagen.waitmydawn.dont_hurt_them.server.FriendshipLifecycle;
 
 @Mixin(Entity.class)
 public abstract class EntityDeathMixin {
-    @Inject(method = "setRemoved", at = @At("HEAD"))
+    @Inject(method = "setRemoved", at = @At("TAIL"))
     private void dontHurtThem$removed(Entity.RemovalReason reason, CallbackInfo callback) {
         FriendshipLifecycle.removed((Entity) (Object) this, reason);
     }
